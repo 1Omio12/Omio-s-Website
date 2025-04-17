@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ORadiation Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #ffffff;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+      color: #0077cc;
+    }
+
+    h2 {
+      font-size: 1.6em;
+      color: #444;
+      margin-bottom: 20px;
+    }
+
+    .controls {
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .controls label {
+      font-size: 1.1em;
+    }
+
+    .controls input {
+      padding: 10px;
+      font-size: 1em;
+      width: 100px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+    }
+
+    .controls button {
+      padding: 10px 20px;
+      font-size: 1em;
+      background-color: #0077cc;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    .controls button:hover {
+      background-color: #005fa3;
+    }
+
+    #chart-container {
+      width: 95%;
+      max-width: 1200px;
+      margin: 0 auto 30px;
+      background: #f9f9f9;
+      padding: 20px;
+      border-radius: 10px;
+      border: 1px solid #ddd;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    }
+
+    #map {
+      height: 600px;
+      width: 100%;
+      border-radius: 10px;
+      margin-bottom: 30px;
+      border: 1px solid #ccc;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .info {
+      font-size: 0.9em;
+      color: #666;
+    }
+
+    #latest-radiation {
+      font-size: 1.5em;
+      margin: 20px auto;
+      padding: 15px;
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      width: fit-content;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    #latest-value {
+      font-weight: bold;
+      color: #0077cc;
+    }
+
+    .legend {
+      background: white;
+      padding: 10px;
+      border-radius: 5px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.2);
+    }
+
+    .legend i {
+      width: 18px;
+      height: 18px;
+      float: left;
+      margin-right: 8px;
+      opacity: 0.7;
+    }
+  </style>
+</head>
+<body>
+  <img src="Military_Institute_of_Science_and_Technology_Monogram.svg.png" alt="MIST Logo" style="position: absolute; top: 30px; left: 30px; height: 70px; z-index: 1000; border-radius: 8px;" />
+  <h1>||OMIO'S RADIATION WEBSITE||</h1>
+  <div id="latest-radiation">LATEST RADIATION LEVEL: <span id="latest-value">N/A</span> µSv/h</div>
+
+  <div class="controls">
+    <label for="points">NUMBER OF DATA:</label>
+    <input type="number" id="points" min="1" max="8000" value="100" />
+    <button onclick="updateMap()">UPDATE</button>
+  </div>
+
+  <div id="chart-container">
+    <canvas id="radiationChart"></canvas>
+  </div>
+
+  <h2>Radiation Mapping</h2>
+  <div id="map"></div>
+  <p class="info">Map updates automatically every 60 seconds. Max 8000 points.</p>
+
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1/moment.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.0"></script>
+
+  <script>
+    var map = L.map('map').setView([0, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    var markers = L.layerGroup().addTo(map);
+
+    var legend = L.control({position: 'bottomright'});
+    legend.onAdd = function (map) {
+      var div = L.DomUtil.create('div', 'info legend');
+      div.innerHTML += '<i style="background:green"></i> Less than 0.1 µSv/h<br>';
+      div.innerHTML += '<i style="background:orange"></i> 0.1 to less than 0.5 µSv/h<br>';
+      div.innerHTML += '<i style="background:red"></i> 0.5 µSv/h and above<br>';
+      return div;
+    };
+    legend.addTo(map);
+
+    var ctx = document.getElementById('radiationChart').getContext('2d');
+    var radiationChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Radiation Level (µSv/h)',
+          data: [],
+          borderColor: '#0077cc',
+          backgroundColor: 'rgba(0, 119, 204, 0.2)',
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          title: {
+            display: true,
+            text: 'Radiation Level Over Time',
+            font: {
+              size: 20
+            },
+            padding: {
+              top: 10,
+              bottom: 20
+            }
+          }
+        },
+        scales: {
+          x: {
+            type: 'time',
+            title: {
+              display: true,
+              text: 'Time'
+            }
+          },
+          y: {
+            title: {
+              display: true,
+              text: 'Radiation Level (µSv/h)'
+            }
+          }
+        }
+      }
+    });
+
+    function getColor(radiation) {
+      if (radiation < 0.1) return 'green';
+      else if (radiation < 0.5) return 'orange';
+      else return 'red';
+    }
+
+    function fetchData(numPoints) {
+      var channelId = '2849195';
+      var url = `https://api.thingspeak.com/channels/${channelId}/feeds.json?results=${numPoints}`;
+
+      fetch(url)
+        .then(response => response.json())
+        .then(data => {
+          data.feeds.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          markers.clearLayers();
+
+          var times = [];
+          var radiations = [];
+
+          data.feeds.forEach(feed => {
+            var lat = parseFloat(feed.field4);
+            var lon = parseFloat(feed.field5);
+            var radiation = parseFloat(feed.field3);
+            var time = feed.created_at;
+
+            if (!isNaN(radiation)) {
+              times.push(time);
+              radiations.push(radiation);
+            }
+
+            if (!isNaN(lat) && !isNaN(lon)) {
+              var marker = L.circleMarker([lat, lon], {
+                radius: 6,
+                fillColor: getColor(radiation),
+                color: '#000',
+                weight: 1,
+                opacity: 1,
+                fillOpacity: 0.8
+              }).addTo(markers);
+              marker.bindPopup(`Radiation: ${radiation} µSv/h<br>Time: ${time}`);
+            }
+          });
+
+          if (data.feeds.length > 0) {
+            var latestFeed = data.feeds[data.feeds.length - 1];
+            var latestRadiation = parseFloat(latestFeed.field3);
+            document.getElementById('latest-value').innerText = !isNaN(latestRadiation)
+              ? latestRadiation.toFixed(2)
+              : 'N/A';
+          } else {
+            document.getElementById('latest-value').innerText = 'N/A';
+          }
+
+          radiationChart.data.labels = times;
+          radiationChart.data.datasets[0].data = radiations;
+          radiationChart.update();
+
+          if (markers.getLayers().length > 0) {
+            map.fitBounds(markers.getBounds(), { maxZoom: 15 });
+          }
+        })
+        .catch(error => console.error('Error fetching data:', error));
+    }
+
+    function updateMap() {
+      var numPoints = document.getElementById('points').value;
+      if (numPoints < 1 || numPoints > 8000) {
+        alert('Please enter a number between 1 and 8000.');
+        return;
+      }
+      fetchData(numPoints);
+    }
+
+    fetchData(100);
+
+    setInterval(() => {
+      var numPoints = document.getElementById('points').value;
+      fetchData(numPoints);
+    }, 60000);
+  </script>
+</body>
+</html>
+
