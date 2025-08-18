@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenMC Online Editor</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; background: #0b0b0c; color: #e6e6e6; }
+    header { padding: 14px 18px; display: flex; gap: 10px; align-items: center; justify-content: space-between; background: #121218; border-bottom: 1px solid #1f2330; }
+    header .left { display: flex; gap: 10px; align-items: center; }
+    header a { color: #9dc1ff; text-decoration: none; font-weight: 600; }
+    .controls { display: flex; gap: 10px; align-items: center; }
+    select, input, button { background: #1a1f2e; color: #e6e6e6; border: 1px solid #2a2f3e; border-radius: 8px; padding: 8px 10px; }
+    button.primary { background: linear-gradient(135deg, #667eea, #764ba2); border: none; font-weight: 700; }
+    main { display: grid; grid-template-columns: 1fr 400px; gap: 0; height: calc(100vh - 58px); }
+    #editor { height: 100%; border-right: 1px solid #1f2330; }
+    .side { display: grid; grid-template-rows: 1fr 1fr; }
+    .panel { border-bottom: 1px solid #1f2330; padding: 12px; overflow: auto; }
+    .panel h3 { margin: 0 0 8px 0; color: #a8edea; }
+    pre { white-space: pre-wrap; background: #0f1220; padding: 10px; border-radius: 8px; border: 1px solid #1f2330; }
+    .small { font-size: 12px; color: #a0a0a0; }
+  </style>
+  <script>if (location.hostname.includes('ngrok')){const o=window.fetch;window.fetch=function(...a){if(a[1]){a[1].headers=a[1].headers||{};a[1].headers['ngrok-skip-browser-warning']='true'}else{a[1]={headers:{'ngrok-skip-browser-warning':'true'}}}return o.apply(this,a)}};</script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+</head>
+<body>
+  <header>
+    <div class="left">
+      <a href="/">← Back</a>
+      <strong>OpenMC Online Editor</strong>
+    </div>
+    <div class="controls">
+      <label class="small">Cross-sections</label>
+      <select id="cross_sections">
+        <option value="jeff-3.3">JEFF-3.3</option>
+        <option value="endfb-viii.0">ENDF/B-VIII.0</option>
+        <option value="endfb-vii.1">ENDF/B-VII.1</option>
+      </select>
+      <input id="email" type="email" placeholder="email (optional)" />
+      <button id="runBtn" class="primary">Run ▶</button>
+      <button id="suggestBtn">Suggest 💡</button>
+      <a id="resultsLink" target="_blank" style="display:none">View Results ↗</a>
+    </div>
+  </header>
+  <main>
+    <div id="editor"></div>
+    <div class="side">
+      <div class="panel">
+        <h3>Logs</h3>
+        <pre id="logs">Execution logs will appear here...</pre>
+      </div>
+      <div class="panel">
+        <h3>AI Suggestion</h3>
+        <pre id="suggestion">Click "Suggest" to see a code snippet or guidance.</pre>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let editor;
+    const defaultCode = `# This script must create geometry.xml, materials.xml, and settings.xml in the CWD.\n\nimport openmc\n\n# Materials\nwater = openmc.Material(name='Water')\nwater.set_density('g/cm3', 1.0)\nwater.add_element('H', 2)\nwater.add_element('O', 1)\nmaterials = openmc.Materials([water])\n\n# Geometry\nsphere = openmc.Sphere(r=50.0, boundary_type='vacuum')\ncell = openmc.Cell(region=-sphere, fill=water)\ngeometry = openmc.Geometry([cell])\n\n# Settings\nsettings = openmc.Settings()\nsettings.run_mode = 'eigenvalue'\nsettings.batches = 50\nsettings.inactive = 10\nsettings.particles = 2000\n\n# Export XML files\nmaterials.export_to_xml()\ngeometry.export_to_xml()\nsettings.export_to_xml()\n`;
+
+    // Monaco setup
+    window.require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+    window.require(['vs/editor/editor.main'], function() {
+      editor = monaco.editor.create(document.getElementById('editor'), {
+        value: defaultCode,
+        language: 'python',
+        theme: 'vs-dark',
+        automaticLayout: true,
+        minimap: { enabled: false },
+        fontSize: 14,
+      });
+    });
+
+    const runBtn = document.getElementById('runBtn');
+    const suggestBtn = document.getElementById('suggestBtn');
+    const logsEl = document.getElementById('logs');
+    const suggEl = document.getElementById('suggestion');
+    const resultsLink = document.getElementById('resultsLink');
+
+    runBtn.addEventListener('click', async () => {
+      logsEl.textContent = 'Submitting code...';
+      resultsLink.style.display = 'none';
+      const code = editor.getValue();
+      const cross_sections = document.getElementById('cross_sections').value;
+      const email = document.getElementById('email').value || undefined;
+      try {
+        const res = await fetch('/api/run-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+          body: JSON.stringify({ code, cross_sections, email })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          logsEl.textContent = (data && (data.log_tail || data.error)) ? (data.log_tail || data.error) : 'Failed to submit code.';
+          return;
+        }
+        const jobId = data.job_id;
+        resultsLink.href = `/results/${jobId}`;
+        resultsLink.style.display = 'inline-block';
+        logsEl.textContent = 'Code accepted. Polling logs...';
+        pollLogs(jobId);
+      } catch (e) {
+        logsEl.textContent = 'Network error: ' + e;
+      }
+    });
+
+    async function pollLogs(jobId){
+      const tick = async () => {
+        try {
+          const res = await fetch(`/api/logs/${jobId}`);
+          const data = await res.json();
+          if (data && data.log !== undefined) logsEl.textContent = data.log || '(no output yet)';
+          // Also poll job status; stop when completed/failed
+          const sr = await fetch(`/status/${jobId}`);
+          const sj = await sr.json();
+          if (sj.status && (sj.status.startsWith('completed') || sj.status.startsWith('failed'))) return; 
+        } catch(_){}
+        setTimeout(tick, 2000);
+      };
+      tick();
+    }
+
+    suggestBtn.addEventListener('click', async () => {
+      suggEl.textContent = 'Requesting suggestion...';
+      const prompt = `You are assisting with writing OpenMC Python scripts. Provide a concise code snippet that sets up a simple geometry and exports geometry.xml, materials.xml, settings.xml. Avoid extra commentary.`;
+      try {
+        const res = await fetch('/api/suggest', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ prompt }) });
+        const data = await res.json();
+        if (data && data.suggestion) {
+          suggEl.textContent = data.suggestion;
+        } else {
+          suggEl.textContent = 'No suggestion available.';
+        }
+      } catch(e){
+        suggEl.textContent = 'Suggestion error: ' + e;
+      }
+    });
+  </script>
+</body>
+</html>
+
