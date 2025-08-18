@@ -1,0 +1,8 @@
+flask==3.0.3
+celery==5.4.0
+redis==5.0.7
+openmc>=0.14.0
+h5py>=3.9.0
+matplotlib>=3.8.0
+werkzeug>=3.0.0
+requests>=2.32.3
