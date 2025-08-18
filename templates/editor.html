@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenMC Online Code Editor</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial; background: #0b0b0c; color: #e8e8ea; }
+        .topbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: #111216; border-bottom: 1px solid #1f2230; }
+        .brand { font-weight: 700; letter-spacing: .3px; }
+        .container { display: grid; grid-template-columns: 1fr 420px; height: calc(100vh - 48px); }
+        .editor-pane { position: relative; }
+        textarea#code { width: 100%; height: 100%; background: #0f111a; color: #e5e9f0; border: none; outline: none; padding: 16px; font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; font-size: 13px; line-height: 1.5; }
+        .side { border-left: 1px solid #1f2230; display: flex; flex-direction: column; }
+        .controls { padding: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; border-bottom: 1px solid #1f2230; }
+        .controls button, .controls select { padding: 10px 12px; border-radius: 8px; border: 1px solid #2a2f45; background: #161925; color: #e8e8ea; cursor: pointer; }
+        .controls button.primary { background: linear-gradient(135deg, #667eea, #764ba2); border-color: transparent; }
+        .controls button:disabled { opacity: .6; cursor: not-allowed; }
+        .fieldset { padding: 12px; border-bottom: 1px solid #1f2230; }
+        .fieldset h3 { margin: 0 0 8px; font-size: 14px; color: #a8edea; }
+        .fieldset label { display: block; margin: 6px 0 4px; font-size: 12px; color: #b9bcc8; }
+        .fieldset input, .fieldset select { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #2a2f45; background: #0f111a; color: #e8e8ea; }
+        .logs { padding: 12px; overflow: auto; flex: 1; background: #0c0e16; font-family: ui-monospace, monospace; font-size: 12px; border-top: 1px solid #1f2230; }
+        .logs pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+        .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #2a2f45; font-size: 12px; color: #cdd3df; }
+        a { color: #a8edea; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <div class="brand">🧪 OpenMC Online Code Editor</div>
+        <div><a href="/">← Back to Home</a></div>
+    </div>
+    <div class="container">
+        <div class="editor-pane">
+            <textarea id="code" spellcheck="false"># Write Python that generates OpenMC XMLs here.
+import openmc
+
+# Example: simple water sphere
+water = openmc.Material(name='Water')
+water.add_nuclide('H1', 2)
+water.add_nuclide('O16', 1)
+water.set_density('g/cm3', 1.0)
+
+materials = openmc.Materials([water])
+materials.export_to_xml()
+
+sphere = openmc.Sphere(r=50.0)
+cell = openmc.Cell(fill=water, region=-sphere)
+geometry = openmc.Geometry([cell])
+geometry.export_to_xml()
+
+settings = openmc.Settings()
+settings.batches = 50
+settings.inactive = 10
+settings.particles = 2000
+settings.export_to_xml()
+
+print('Generated materials.xml, geometry.xml, settings.xml')</textarea>
+        </div>
+        <div class="side">
+            <div class="controls">
+                <button id="run" class="primary">Run Code</button>
+                <button id="run_openmc">Run + OpenMC</button>
+                <select id="xs">
+                    <option value="jeff-3.3">JEFF-3.3</option>
+                    <option value="endfb-viii.0">ENDF/B-VIII.0</option>
+                    <option value="endfb-vii.1">ENDF/B-VII.1</option>
+                </select>
+                <button id="save_files">Show Generated Files</button>
+            </div>
+            <div class="fieldset">
+                <h3>AI Assistant</h3>
+                <label for="question">Ask for code help</label>
+                <input id="question" placeholder="e.g. create uo2 + zr cladding pin cell model">
+                <div style="margin-top:8px; display:flex; gap:8px;">
+                    <button id="ask">Ask</button>
+                    <span class="badge" id="ai_status">Local AI: auto</span>
+                </div>
+            </div>
+            <div class="logs">
+                <pre id="output">Session: <span id="session"></span>
+—
+Press "Run Code" to execute your Python and stream logs here.
+Use "Run + OpenMC" to also execute the transport calculation if XMLs are generated.
+                </pre>
+            </div>
+        </div>
+    </div>
+    <script>
+        let sessionId = '{{ session_id }}';
+        document.getElementById('session').textContent = sessionId;
+        const output = document.getElementById('output');
+        const xs = document.getElementById('xs');
+        const runBtn = document.getElementById('run');
+        const runOpenmcBtn = document.getElementById('run_openmc');
+        const saveBtn = document.getElementById('save_files');
+        const askBtn = document.getElementById('ask');
+        const aiStatus = document.getElementById('ai_status');
+
+        function append(text) {
+            output.textContent += '\n' + text;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        async function startExecution(autoRun) {
+            const code = document.getElementById('code').value;
+            runBtn.disabled = true; runOpenmcBtn.disabled = true;
+            try {
+                const resp = await fetch('/api/editor/execute', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ session_id: sessionId, code, auto_run_openmc: !!autoRun, cross_sections: xs.value })
+                });
+                const meta = await resp.json();
+                if (meta.error) { append('Error: ' + meta.error); runBtn.disabled = false; runOpenmcBtn.disabled = false; return; }
+                append('Execution started: ' + meta.execution_id);
+                pollResult(meta.execution_id);
+            } catch (e) {
+                append('Failed to start execution: ' + e.message);
+                runBtn.disabled = false; runOpenmcBtn.disabled = false;
+            }
+        }
+
+        async function pollResult(execId) {
+            let done = false; let lastStdout = ''; let lastStderr = '';
+            while (!done) {
+                await new Promise(r => setTimeout(r, 1000));
+                const resp = await fetch('/api/editor/result/' + execId);
+                const data = await resp.json();
+                if (data.stdout && data.stdout !== lastStdout) { append('STDOUT:\n' + data.stdout); lastStdout = data.stdout; }
+                if (data.stderr && data.stderr !== lastStderr) { append('STDERR:\n' + data.stderr); lastStderr = data.stderr; }
+                if (data.status && (data.status === 'completed' || data.status === 'failed')) {
+                    done = true;
+                    append('Execution finished with status: ' + data.status + (data.return_code !== undefined ? (' (code ' + data.return_code + ')') : ''));
+                    if (data.generated_files && data.generated_files.length) { append('Generated files: ' + data.generated_files.join(', ')); }
+                    if (data.openmc && data.openmc.success && data.openmc.plots && data.openmc.plots.length) { append('OpenMC plots generated: ' + data.openmc.plots.join(', ')); }
+                    runBtn.disabled = false; runOpenmcBtn.disabled = false;
+                }
+            }
+        }
+
+        runBtn.addEventListener('click', () => startExecution(false));
+        runOpenmcBtn.addEventListener('click', () => startExecution(true));
+        saveBtn.addEventListener('click', () => append('Files are saved under server jobs/' + sessionId));
+
+        askBtn.addEventListener('click', async () => {
+            const q = document.getElementById('question').value;
+            const ctx = document.getElementById('code').value.slice(0, 8000);
+            aiStatus.textContent = 'Local AI: querying…';
+            try {
+                const resp = await fetch('/api/editor/suggest', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ question: q, context: ctx }) });
+                const data = await resp.json();
+                if (data.success && data.suggestion) {
+                    append('AI suggestion received. Appending to editor.');
+                    document.getElementById('code').value += '\n\n' + data.suggestion;
+                    aiStatus.textContent = 'Local AI: ok';
+                } else {
+                    aiStatus.textContent = 'Local AI: unavailable';
+                    append('AI error: ' + (data.error || 'Unknown'));
+                }
+            } catch (e) {
+                aiStatus.textContent = 'Local AI: unavailable';
+                append('AI error: ' + e.message);
+            }
+        });
+    </script>
+</body>
+</html>
+
