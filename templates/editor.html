@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenMC Online Code Editor</title>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; background:#0b0b0c; color:#e5e7eb}
+    .topbar{display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:#111827; border-bottom:1px solid #1f2937}
+    .btn{background:linear-gradient(135deg,#667eea,#764ba2); padding:10px 14px; border:none; border-radius:8px; color:white; font-weight:600; cursor:pointer}
+    .btn.secondary{background:linear-gradient(135deg,#10b981,#059669)}
+    .layout{display:grid; grid-template-columns: 1.2fr .8fr; gap:12px; padding:12px}
+    .panel{background:#111827; border:1px solid #1f2937; border-radius:10px; overflow:hidden}
+    .panel h3{margin:0; padding:10px 12px; border-bottom:1px solid #1f2937; color:#a8edea}
+    .panel-body{padding:12px}
+    .row{display:flex; gap:8px; align-items:center; margin-bottom:8px}
+    textarea{width:100%; height:60vh; background:#0b1220; color:#e5e7eb; border:1px solid #2b3441; border-radius:8px; padding:12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:14px}
+    select,input{background:#0b1220; border:1px solid #2b3441; color:#e5e7eb; border-radius:8px; padding:8px}
+    .log{white-space:pre-wrap; background:#0b1220; border:1px solid #2b3441; border-radius:8px; padding:12px; height:30vh; overflow:auto}
+    a.link{color:#93c5fd}
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div>✏️ OpenMC Online Code Editor</div>
+    <div>
+      <a href="/" class="btn" style="text-decoration:none">⬅ Home</a>
+    </div>
+  </div>
+  <div class="layout">
+    <div class="panel">
+      <h3>Python Code</h3>
+      <div class="panel-body">
+        <div class="row">
+          <label>Cross-sections</label>
+          <select id="xs">
+            <option value="jeff-3.3">JEFF-3.3</option>
+            <option value="endfb-viii.0">ENDF/B-VIII.0</option>
+            <option value="endfb-vii.1">ENDF/B-VII.1</option>
+          </select>
+          <input id="email" type="email" placeholder="your.email@example.com" style="flex:1">
+        </div>
+        <textarea id="code"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" onclick="runCode()">Run Code → Generate XML + Simulate</button>
+          <button class="btn secondary" onclick="askAI()">💡 AI Suggest</button>
+        </div>
+        <div class="row" id="result-row" style="display:none; margin-top:8px"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>AI Assistant & Logs</h3>
+      <div class="panel-body">
+        <div class="row">
+          <input id="ai-prompt" placeholder="Ask for help (e.g., how to define a slab with UO2 and water?)" style="flex:1">
+        </div>
+        <div class="log" id="ai-answer"></div>
+        <h3 style="margin-top:12px">Execution Log</h3>
+        <div class="log" id="run-log">No logs yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const defaultCode = `# Example OpenMC script that writes materials.xml, geometry.xml, and settings.xml\n# Run is handled by the server after this script finishes.\n\nimport openmc\n\n# Materials\nuo2 = openmc.Material(name='UO2 fuel')\nuo2.add_element('U', 1.0, enrichment=4.25)\nuo2.add_element('O', 2.0)\nu2 = openmc.Material(name='Water')\nu2.add_element('H', 2)\nu2.add_element('O', 1)\nu2.set_density('g/cm3', 1.0)\nmaterials = openmc.Materials([uo2, u2])\nmaterials.export_to_xml()\n\n# Geometry (simple slab)\nzmin = openmc.ZPlane(z0=-5.0)\nzmax = openmc.ZPlane(z0=5.0)\nbox = openmc.model.RectangularParallelepiped(-5,5,-5,5,-5,5,boundary_type='vacuum')\ncell_fuel = openmc.Cell(fill=uo2, region=-openmc.ZPlane(z0=0.0) & +zmin)\ncell_mod = openmc.Cell(fill=u2, region=+openmc.ZPlane(z0=0.0) & -zmax)\nuniv = openmc.Universe(cells=[cell_fuel, cell_mod])\ngeom = openmc.Geometry(univ)\ngeom.export_to_xml()\n\n# Settings\nsettings = openmc.Settings()\nsettings.batches = 50\nsettings.inactive = 10\nsettings.particles = 1000\nsettings.run_mode = 'eigenvalue'\nsettings.export_to_xml()\n`;
+
+    const codeEl = document.getElementById('code');
+    codeEl.value = defaultCode;
+
+    async function runCode(){
+      const xs = document.getElementById('xs').value;
+      const email = document.getElementById('email').value || 'test@example.com';
+      const code = codeEl.value;
+      const fd = new FormData();
+      fd.append('cross_sections', xs);
+      fd.append('email', email);
+      fd.append('code', code);
+      const res = await fetch('/code/submit', { method:'POST', body: fd });
+      const data = await res.json();
+      const row = document.getElementById('result-row');
+      if (data.error){ row.style.display='block'; row.innerHTML = `<span style="color:#fca5a5">Error: ${data.error}</span>`; return; }
+      row.style.display='block';
+      row.innerHTML = `<span>Job queued: ${data.job_id} · <a class="link" href="/results/${data.job_id}">Open results</a></span>`;
+      pollLogs(data.job_id);
+    }
+
+    async function pollLogs(jobId){
+      const logEl = document.getElementById('run-log');
+      const interval = setInterval(async ()=>{
+        try{
+          const res = await fetch(`/status/${jobId}`);
+          const s = await res.json();
+          const logRes = await fetch(`/logs/${jobId}`);
+          const l = await logRes.json();
+          logEl.textContent = l.log || '';
+          if (s.status && (s.status.startsWith('completed') || s.status.startsWith('failed'))){ clearInterval(interval); }
+        }catch(e){ /* ignore */ }
+      }, 3000);
+    }
+
+    async function askAI(){
+      const p = document.getElementById('ai-prompt').value;
+      const code = codeEl.value;
+      const res = await fetch('/ai/suggest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ prompt: p, code }) });
+      const data = await res.json();
+      const ans = document.getElementById('ai-answer');
+      ans.textContent = data.suggestion || data.error || 'No response';
+    }
+  </script>
+</body>
+</html>
+
